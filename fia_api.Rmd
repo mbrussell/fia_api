@@ -1,0 +1,134 @@
+---
+title: "Getting EVALIdator data from the API"
+author: "Matt Russell"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r}
+# Load packages
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(rlist)
+```
+
+```{r}
+# fiadb_api_POST() will accept a FIADB-API full report URL and return data frames
+# See descriptor: https://apps.fs.usda.gov/fiadb-api/
+
+fiadb_api_POST <- function(argList){
+  # make request
+  resp <- POST(url="https://apps.fs.usda.gov/fiadb-api/fullreport", 
+               body=argList, encode="form")
+  # parse response from JSON to R list
+  respObj <- content(resp, "parsed", encoding = "ISO-8859-1")
+  # create empty output list
+  outputList <- list()
+  # add estimates data frame to output list
+  outputList[['estimates']] <- as.data.frame(do.call(rbind,respObj$estimates))
+
+  # if estimate includes totals and subtotals, add those data frames to output list
+  if ('subtotals' %in% names(respObj)){
+    subtotals <- list()
+    # one subtotal data frame for each grouping variable
+    for (i in names(respObj$subtotals)){
+      subtotals[[i]] <- as.data.frame(do.call(rbind,respObj$subtotals[[i]]))
+    }
+    outputList[['subtotals']] <- subtotals
+
+    # totals data frame
+    outputList[['totals']] <- as.data.frame(do.call(rbind,respObj$totals))
+  }
+
+  # add estimate metadata
+  outputList[['metadata']] <- respObj$metadata
+
+  return(outputList)
+}
+```
+
+
+```{r}
+# Change the values in arg_list to get different data
+
+# snum is a numeric value representing the attribute of interest (e.g., 2 is for area of forestland in acres)
+# snum is described here: https://apps.fs.usda.gov/fiadb-api/fullreport/parameters/snum
+
+# rselected is the text for the row grouping variable (e.g, 'Forest type group')
+# cselected is the text for the column grouping variable (e.g., 'Ownership group')
+# pselected is the text for the page grouping variable. This is optional and can be left blank
+
+# All of the "selected" grouping variables are described here: https://apps.fs.usda.gov/fiadb-api/fullreport/parameters/rselected
+
+# wc is the evaluation group code(s) for inventory(ies) of interest.
+# wc typically consists of the state FIPS code concatenated with the 4 digit inventory year (e.g., 272022 for Minnesota, 2022 data)
+
+# The code below will retrieve the area of Minnesota forests (in acres) by ownership group and forest type group 
+# Data for the 2022 inventory 
+
+# Running this code will provide the same values as presented here:
+# https://apps.fs.usda.gov/fiadb-api/fullreport?rselected=Forest%20type%20group&cselected=Ownership%20group&snum=2&wc=272022
+
+arg_list <- list(snum = 2,
+               wc = 272022,
+               rselected = 'Forest type group',
+               cselected = 'Ownership group',
+               # pselected = '',
+               outputFormat = 'NJSON')
+
+# submit list to POST request function
+post_data <- fiadb_api_POST(arg_list)
+
+# estimate data frame
+mn_acres <- post_data[['estimates']]
+mn_acres
+```
+
+```{r}
+# Clean up the dataset
+
+mn_acres2 <- as_tibble(mn_acres) |>  
+  mutate(total_area = as.numeric(ESTIMATE),
+           ownership_group = as.character(GRP2),
+           forest_type_group = as.character(GRP1)) |> 
+  select(forest_type_group,
+         ownership_group,  
+         total_area)
+mn_acres2
+```
+
+```{r}
+# Summarize the data by forest type group
+forest_summ <- mn_acres2 |> 
+  group_by(forest_type_group) |> 
+  summarise(total_area = sum(total_area, na.rm = TRUE)) |> 
+  ungroup() |> 
+  arrange(desc(total_area))
+forest_summ
+
+ggplot(forest_summ, aes(x = reorder(forest_type_group, total_area), y = total_area)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = "Forest type group",
+       y = "Forestland area (acres)") +
+  theme_minimal()
+
+
+# Summarize the data by ownership
+ownership_summ <- mn_acres2 |> 
+  group_by(ownership_group) |> 
+  summarise(total_area = sum(total_area, na.rm = TRUE)) |> 
+  ungroup() |> 
+  arrange(desc(total_area))
+ownership_summ
+
+ggplot(ownership_summ, aes(x = reorder(ownership_group, total_area), y = total_area)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = "Forest type group",
+       y = "Forestland area (acres)") +
+  theme_minimal()
+```
+
